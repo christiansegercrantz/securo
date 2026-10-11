@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 
 import DashboardPage from '@/pages/dashboard'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
     summary: vi.fn(),
     spendingByCategory: vi.fn(),
     balanceHistory: vi.fn(),
+    balanceHistoryMonths: vi.fn(),
     projectedTransactions: vi.fn(),
   },
   transactions: { list: vi.fn(), calendar: vi.fn() },
@@ -108,7 +109,15 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.dashboard.summary.mockResolvedValue(summary)
   api.dashboard.spendingByCategory.mockResolvedValue([])
-  api.dashboard.balanceHistory.mockResolvedValue({ current: [], previous: [] })
+  api.dashboard.balanceHistory.mockResolvedValue({
+    current: [],
+    opening_balance: 0,
+    baseline: [],
+    comparison: null,
+    comparison_month: null,
+    comparison_opening_balance: null,
+  })
+  api.dashboard.balanceHistoryMonths.mockResolvedValue([])
   api.dashboard.projectedTransactions.mockResolvedValue([])
   api.transactions.list.mockResolvedValue({ items: [], total: 0 })
   api.budgets.comparison.mockResolvedValue([])
@@ -134,5 +143,61 @@ describe('Dashboard net worth breakdown', () => {
     const tooltip = await screen.findByRole('tooltip')
     const cardRow = within(tooltip).getByText(t('dashboard.creditCardBalance')).parentElement!
     expect(cardRow).toHaveTextContent(formatCurrency(-500, 'USD', 'en-US'))
+  })
+})
+
+describe('Dashboard balance comparisons', () => {
+  it('requests a selected single month and displays its comparison line', async () => {
+    api.dashboard.balanceHistoryMonths.mockResolvedValue(['2026-01', '2026-02', '2026-03'])
+    api.dashboard.balanceHistory.mockResolvedValue({
+      current: [{ day: 1, balance: 1100 }],
+      opening_balance: 1000,
+      baseline: [],
+      comparison: [
+        { day: 1, balance: 2000 },
+        { day: 2, balance: 2000 },
+      ],
+      comparison_month: '2026-02',
+      comparison_opening_balance: 1900,
+    })
+
+    renderWithProviders(
+      <TooltipProvider delayDuration={0}>
+        <DashboardPage />
+      </TooltipProvider>,
+      { route: '/?month=2026-04&comparison_month=2026-02' },
+    )
+
+    await waitFor(() => {
+      expect(api.dashboard.balanceHistory).toHaveBeenCalledWith(
+        '2026-04-01',
+        undefined,
+        ['2026-02-01'],
+      )
+    })
+  })
+
+  it('lets users add and remove comparison months from the selector', async () => {
+    api.dashboard.balanceHistoryMonths.mockResolvedValue(['2026-01', '2026-02', '2026-03'])
+
+    const { user } = renderWithProviders(
+      <TooltipProvider delayDuration={0}>
+        <DashboardPage />
+      </TooltipProvider>,
+      { route: '/?month=2026-04&comparison_month=2026-02' },
+    )
+
+    const selector = await screen.findByRole('button', { name: t('dashboard.compareMonths') })
+    await user.click(selector)
+    const [march] = await screen.findAllByRole('checkbox')
+    await user.click(march)
+
+    await waitFor(() => {
+      expect(api.dashboard.balanceHistory).toHaveBeenLastCalledWith(
+        '2026-04-01',
+        undefined,
+        ['2026-02-01', '2026-03-01'],
+      )
+    })
   })
 })
