@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
+import { useNavigate } from 'react-router-dom'
 
 import DashboardPage from '@/pages/dashboard'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -77,6 +78,16 @@ function account(overrides: Partial<Account>): Account {
     closed_at: null,
     ...overrides,
   }
+}
+
+function DashboardRouteNavigation() {
+  const navigate = useNavigate()
+  return (
+    <>
+      <button onClick={() => navigate('/?month=2026-03&comparison_month=2026-02')}>Navigate to March</button>
+      <button onClick={() => navigate('/?month=2026-04&comparison_month=2026-02')}>Navigate to April</button>
+    </>
+  )
 }
 
 // Two cards on one shared credit line both report the line's full -300.
@@ -242,6 +253,24 @@ describe('Dashboard balance comparisons', () => {
         ['2025-06-01', '2026-03-01'],
       )
     })
+  })
+
+  it('follows back and forward navigation between viewed months', async () => {
+    api.dashboard.balanceHistoryMonths.mockResolvedValue(['2026-01', '2026-02', '2026-03'])
+
+    const { user } = renderWithProviders(
+      <TooltipProvider delayDuration={0}>
+        <DashboardRouteNavigation />
+        <DashboardPage />
+      </TooltipProvider>,
+      { route: '/?month=2026-04&comparison_month=2026-02' },
+    )
+
+    expect(await screen.findByRole('heading', { name: 'April 2026' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Navigate to March' }))
+    expect(await screen.findByRole('heading', { name: 'March 2026' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Navigate to April' }))
+    expect(await screen.findByRole('heading', { name: 'April 2026' })).toBeInTheDocument()
   })
 
   it('offers only earlier months, newest first, and keeps the last selected month checked', async () => {
