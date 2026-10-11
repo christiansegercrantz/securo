@@ -137,6 +137,8 @@ export default function DashboardPage() {
   const [calendarSelectedDate, setCalendarSelectedDate] = useState<string>(() => searchParams.get('day') ?? '')
 
   const prevSearchRef = useRef<string | null>(null)
+  const searchParamsRef = useRef(searchParams)
+  searchParamsRef.current = searchParams
 
   // Sync state from URL when navigating (e.g. back/forward button)
   useEffect(() => {
@@ -157,7 +159,7 @@ export default function DashboardPage() {
 
   // Sync selectedMonth and the transactions view back to URL
   useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString())
+    const params = new URLSearchParams(searchParamsRef.current.toString())
     if (selectedMonth) {
       params.set('month', selectedMonth)
       params.delete('from')
@@ -176,7 +178,7 @@ export default function DashboardPage() {
     }
 
     setSearchParams(params, { replace: true })
-  }, [selectedMonth, txViewMode, calendarSelectedDate, searchParams, setSearchParams])
+  }, [selectedMonth, txViewMode, calendarSelectedDate, setSearchParams])
   const [editingTx, setEditingTx] = useState<Transaction | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [createRuleOpen, setCreateRuleOpen] = useState(false)
