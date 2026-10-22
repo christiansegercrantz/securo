@@ -20,6 +20,7 @@ from app.services.dashboard_service import (
     _total_balance_by_currency,
     get_balance_history,
     get_balance_history_months,
+    get_monthly_trend,
     get_summary,
     get_spending_by_category,
     get_projected_transactions,
@@ -1030,6 +1031,7 @@ async def test_balance_history_single_comparison_reuses_month_daily_balances(
     assert history.baseline == []
 
 
+
 @pytest.mark.asyncio
 async def test_balance_history_sparse_month_selection_excludes_gap_month(
     session: AsyncSession, test_user, test_workspace
@@ -1172,6 +1174,7 @@ def test_baseline_two_months_has_median_without_quartiles():
     assert baseline[4].median == 15.0
     assert baseline[4].lower_quartile is None
     assert baseline[4].upper_quartile is None
+
 
 
 @pytest.mark.asyncio
