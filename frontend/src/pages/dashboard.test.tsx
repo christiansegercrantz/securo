@@ -86,6 +86,7 @@ function DashboardRouteNavigation() {
     <>
       <button onClick={() => navigate('/?month=2026-03&comparison_month=2026-02')}>Navigate to March</button>
       <button onClick={() => navigate('/?month=2026-04&comparison_month=2026-02')}>Navigate to April</button>
+      <button onClick={() => navigate('/?month=2026-04&comparison_month=2026-03')}>Compare April with March</button>
     </>
   )
 }
@@ -362,6 +363,28 @@ describe('Dashboard balance comparisons', () => {
     expect(await screen.findByRole('heading', { name: 'March 2026' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Navigate to April' }))
     expect(await screen.findByRole('heading', { name: 'April 2026' })).toBeInTheDocument()
+  })
+
+  it('keeps a comparison month that is only valid for the month being navigated to', async () => {
+    api.dashboard.balanceHistoryMonths.mockResolvedValue(['2026-01', '2026-02', '2026-03'])
+
+    const { user } = renderWithProviders(
+      <TooltipProvider delayDuration={0}>
+        <LocationProbe />
+        <DashboardRouteNavigation />
+        <DashboardPage />
+      </TooltipProvider>,
+      { route: '/?month=2026-03&comparison_month=2026-02' },
+    )
+
+    expect(await screen.findByRole('heading', { name: 'March 2026' })).toBeInTheDocument()
+    await waitFor(() => expect(api.dashboard.balanceHistory).toHaveBeenCalled())
+    // March is not an earlier month while March is still shown, but it is for April.
+    await user.click(screen.getByRole('button', { name: 'Compare April with March' }))
+
+    expect(await screen.findByRole('heading', { name: 'April 2026' })).toBeInTheDocument()
+    await waitFor(() => expect(api.dashboard.balanceHistory).toHaveBeenCalledWith('2026-04-01', undefined, ['2026-03-01']))
+    expect(screen.getByTestId('location-search')).toHaveTextContent('comparison_month=2026-03')
   })
 
   it('offers only earlier months, newest first, and keeps the last selected month checked', async () => {

@@ -235,6 +235,9 @@ export default function DashboardPage() {
   useEffect(() => {
     // Only prune once the options have loaded; a failed request must not drop a shared selection.
     if (comparisonMonthsLoading || !comparisonMonthOptions || requestedComparisonMonths.length === 0) return
+    // After navigation the URL is ahead of selectedMonth for one render; validate against the month it asks for.
+    const urlMonth = parseMonthFromParams(searchParams)
+    if (urlMonth && urlMonth !== selectedMonth) return
     if (
       requestedComparisonMonths.length === validComparisonMonths.length &&
       requestedComparisonMonths.every((month, index) => month === validComparisonMonths[index])
@@ -249,6 +252,7 @@ export default function DashboardPage() {
     comparisonMonthOptions,
     requestedComparisonMonths,
     validComparisonMonths,
+    selectedMonth,
     searchParams,
     setSearchParams,
   ])
