@@ -1109,6 +1109,25 @@ async def test_balance_history_month_options_are_scoped_and_exclude_openings(
     assert first_account_months == ["2026-02"]
 
 
+@pytest.mark.asyncio
+async def test_balance_history_month_options_exclude_loans(
+    session: AsyncSession, test_user, test_workspace
+):
+    # Loans are left out of the balance curve, so their months have no data to plot.
+    checking = await _make_account(session, test_user.id, "Months checking")
+    loan = await _make_account(session, test_user.id, "Months loan", acc_type="loan")
+    checking.workspace_id = test_workspace.id
+    loan.workspace_id = test_workspace.id
+    await session.commit()
+    await _add_txn(session, test_user.id, checking.id, 25, "credit", date(2026, 2, 1))
+    await _add_txn(session, test_user.id, loan.id, 300, "debit", date(2026, 3, 1))
+
+    assert await get_balance_history_months(session, test_workspace.id) == ["2026-02"]
+    assert await get_balance_history_months(
+        session, test_workspace.id, [checking.id, loan.id]
+    ) == ["2026-02"]
+
+
 def test_baseline_from_deltas_median_and_quartiles():
 
     # Four months; day-1 changes are -10, -20, -30, -40.

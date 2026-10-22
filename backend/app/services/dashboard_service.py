@@ -1683,6 +1683,7 @@ async def get_balance_history_months(
         .where(
             Transaction.workspace_id == workspace_id,
             Account.is_closed == False,
+            Account.type != "loan",
             Transaction.date <= app_today(),
             Transaction.status == "posted",
             Transaction.is_ignored == False,

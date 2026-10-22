@@ -233,7 +233,8 @@ export default function DashboardPage() {
   const comparisonMonths = validComparisonMonths.length > 0 ? validComparisonMonths : defaultMonths
 
   useEffect(() => {
-    if (comparisonMonthsLoading || requestedComparisonMonths.length === 0) return
+    // Only prune once the options have loaded; a failed request must not drop a shared selection.
+    if (comparisonMonthsLoading || !comparisonMonthOptions || requestedComparisonMonths.length === 0) return
     if (
       requestedComparisonMonths.length === validComparisonMonths.length &&
       requestedComparisonMonths.every((month, index) => month === validComparisonMonths[index])
@@ -245,6 +246,7 @@ export default function DashboardPage() {
     setSearchParams(params, { replace: true })
   }, [
     comparisonMonthsLoading,
+    comparisonMonthOptions,
     requestedComparisonMonths,
     validComparisonMonths,
     searchParams,
@@ -460,6 +462,9 @@ export default function DashboardPage() {
       const comparisonPoint = balanceHistory.comparison?.find(d => d.day === day)
       if (comparisonPoint?.balance != null && balanceHistory.comparison_opening_balance != null) {
         lastComparison = comparisonPoint.balance - balanceHistory.comparison_opening_balance
+      } else if (comparisonPoint) {
+        // A null balance is a day after today; only carry over days the comparison month lacks.
+        lastComparison = null
       }
       const base = balanceHistory.baseline.find(d => d.day === day)
       const hasBand = base?.lower_quartile != null && base?.upper_quartile != null

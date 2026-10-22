@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
-import { useNavigate } from 'react-router-dom'
+import { act, screen, waitFor, within } from '@testing-library/react'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import DashboardPage from '@/pages/dashboard'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -88,6 +88,11 @@ function DashboardRouteNavigation() {
       <button onClick={() => navigate('/?month=2026-04&comparison_month=2026-02')}>Navigate to April</button>
     </>
   )
+}
+
+function LocationProbe() {
+  const location = useLocation()
+  return <output data-testid="location-search">{location.search}</output>
 }
 
 // Two cards on one shared credit line both report the line's full -300.
@@ -253,6 +258,44 @@ describe('Dashboard balance comparisons', () => {
     expect(screen.getAllByText(month('2026-02')).some((el) => !el.closest('button'))).toBe(true)
     expect(screen.queryByText(t('dashboard.balanceMedianLegend'))).not.toBeInTheDocument()
     expect(api.dashboard.balanceHistory).toHaveBeenCalledWith('2026-04-01', undefined, ['2026-02-01'])
+  })
+
+  it('does not carry a comparison month past its last known day', async () => {
+    api.dashboard.balanceHistoryMonths.mockResolvedValue(['2026-01', '2026-02', '2026-03'])
+    // The comparison month is still in progress: days after today come back null.
+    mockHistory({
+      current: [{ day: 1, balance: 1100 }, { day: 2, balance: 1100 }],
+      comparison: [{ day: 1, balance: 1950 }, { day: 2, balance: null }],
+      comparison_month: '2026-03',
+      comparison_opening_balance: 1900,
+    })
+
+    renderDashboard('/?month=2026-04&comparison_month=2026-03')
+
+    await waitFor(async () => expect(await selectorButton()).toHaveTextContent(month('2026-03')))
+    expect(await screen.findAllByText(month('2026-03'))).not.toHaveLength(0)
+    // Day 2 has no comparison value, so there is no footer delta to show.
+    expect(screen.queryByText(
+      t('dashboard.balanceFlowVsMonth', { day: 2, month: month('2026-03'), delta: signed(50) }),
+    )).not.toBeInTheDocument()
+  })
+
+  it('keeps the URL selection when the month options fail to load', async () => {
+    api.dashboard.balanceHistoryMonths.mockRejectedValue(new Error('network'))
+
+    renderWithProviders(
+      <TooltipProvider delayDuration={0}>
+        <LocationProbe />
+        <DashboardPage />
+      </TooltipProvider>,
+      { route: '/?month=2026-04&comparison_month=2026-02' },
+    )
+
+    expect(await screen.findByRole('heading', { name: 'April 2026' })).toBeInTheDocument()
+    // History waits for the month options, so once it is requested the failed request has settled.
+    await waitFor(() => expect(api.dashboard.balanceHistory).toHaveBeenCalled())
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(screen.getByTestId('location-search')).toHaveTextContent('comparison_month=2026-02')
   })
 
   it('shows the median and the range with three months, compared against the median', async () => {
