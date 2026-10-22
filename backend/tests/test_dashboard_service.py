@@ -1031,6 +1031,32 @@ async def test_balance_history_single_comparison_reuses_month_daily_balances(
     assert history.baseline == []
 
 
+@pytest.mark.asyncio
+async def test_balance_history_single_comparison_stops_at_today(
+    session: AsyncSession, test_user, test_workspace, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.dashboard_service.app_today", lambda: date(2026, 10, 18)
+    )
+    account = await _make_account(session, test_user.id, "In-progress comparison")
+    account.workspace_id = test_workspace.id
+    await session.commit()
+    await _add_txn(session, test_user.id, account.id, 50, "credit", date(2026, 10, 5))
+
+    history = await get_balance_history(
+        session,
+        test_workspace.id,
+        test_user.id,
+        month=date(2026, 11, 1),
+        account_ids=[account.id],
+        comparison_months=[date(2026, 10, 1)],
+    )
+
+    assert history.comparison is not None
+    assert len(history.comparison) == 31
+    assert history.comparison[17].balance is not None
+    assert all(point.balance is None for point in history.comparison[18:])
+
 
 @pytest.mark.asyncio
 async def test_balance_history_sparse_month_selection_excludes_gap_month(
@@ -1093,7 +1119,7 @@ def test_baseline_from_deltas_median_and_quartiles():
         date(2026, 4, 1): -40.0,
     }
     month_starts = [date(2026, month, 1) for month in range(1, 5)]
-    baseline = _baseline_from_deltas(deltas, month_starts, 31)
+    baseline = _baseline_from_deltas(deltas, month_starts, 31, date.max)
     assert len(baseline) == 31
     day1 = baseline[0]
     assert day1.median == -25.0
@@ -1113,6 +1139,7 @@ def test_baseline_three_contributors_include_quartiles():
         deltas,
         [date(2026, 1, 1), date(2026, 2, 1), date(2026, 3, 1)],
         30,
+        date.max,
     )
 
     assert baseline[0].median == 20.0
@@ -1161,7 +1188,7 @@ def test_baseline_aligns_month_end_income():
     }
     for target_days in (28, 30, 31):
         month_starts = [date(2026, month, 1) for month in range(1, 5)]
-        baseline = _baseline_from_deltas(deltas, month_starts, target_days)
+        baseline = _baseline_from_deltas(deltas, month_starts, target_days, date.max)
         assert len(baseline) == target_days
         assert baseline[-1].median == 100.0
         assert baseline[0].median == 0.0
@@ -1170,11 +1197,27 @@ def test_baseline_aligns_month_end_income():
 def test_baseline_two_months_has_median_without_quartiles():
     deltas = {date(2026, 1, 5): 10.0, date(2026, 2, 5): 20.0}
     month_starts = [date(2026, month, 1) for month in range(1, 13)]
-    baseline = _baseline_from_deltas(deltas, month_starts, 30)
+    baseline = _baseline_from_deltas(deltas, month_starts, 30, date.max)
     assert baseline[4].median == 15.0
     assert baseline[4].lower_quartile is None
     assert baseline[4].upper_quartile is None
 
+
+def test_baseline_omits_source_days_after_today():
+    # Viewing a future month: the in-progress month must not carry its
+    # balance flat past today and drag the median.
+    deltas = {
+        date(2026, 8, 1): 10.0,
+        date(2026, 9, 1): 20.0,
+        date(2026, 10, 1): 30.0,
+        date(2026, 10, 20): 1000.0,
+    }
+    month_starts = [date(2026, 8, 1), date(2026, 9, 1), date(2026, 10, 1)]
+    baseline = _baseline_from_deltas(deltas, month_starts, 30, date(2026, 10, 18))
+
+    assert baseline[17].median == 20.0  # day 18: Aug, Sep, Oct all count
+    assert baseline[18].median == 15.0  # day 19: only Aug and Sep
+    assert baseline[18].lower_quartile is None
 
 
 @pytest.mark.asyncio

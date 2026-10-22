@@ -1577,7 +1577,10 @@ async def _daily_deltas(
 
 
 def _baseline_from_deltas(
-    deltas: dict[date, float], month_starts: list[date], target_days: int
+    deltas: dict[date, float],
+    month_starts: list[date],
+    target_days: int,
+    today: date,
 ) -> list[DailyBaseline]:
     """Per-day median and P25/P75 of cumulative change across months with data."""
     by_day: dict[int, list[float]] = {}
@@ -1592,9 +1595,11 @@ def _baseline_from_deltas(
                 running += deltas.get(month_start.replace(day=day), 0.0)
                 cumulative.append(running)
             for day in range(1, target_days + 1):
-                by_day.setdefault(day, []).append(
-                    cumulative[_source_day(day, target_days, days) - 1]
-                )
+                source_day = _source_day(day, target_days, days)
+                # Days after today have no data yet; don't carry the balance flat.
+                if month_start.replace(day=source_day) > today:
+                    continue
+                by_day.setdefault(day, []).append(cumulative[source_day - 1])
 
     baseline = []
     for day in range(1, target_days + 1):
@@ -1774,9 +1779,11 @@ async def get_balance_history(
             comparison_days = (comparison_end - comparison_start).days
             for day in range(1, comparison_days + 1):
                 comparison_balance += comparison_deltas.get(day, 0.0)
-                comparison.append(
-                    DailyBalance(day=day, balance=round(comparison_balance, 2))
-                )
+                is_future = comparison_start.replace(day=day) > today
+                comparison.append(DailyBalance(
+                    day=day,
+                    balance=None if is_future else round(comparison_balance, 2),
+                ))
     else:
         baseline_deltas = await _daily_balance_deltas_by_date(
             session,
@@ -1789,7 +1796,7 @@ async def get_balance_history(
             month_starts=selected_comparison_months,
         )
         baseline = _baseline_from_deltas(
-            baseline_deltas, selected_comparison_months, days_in_month
+            baseline_deltas, selected_comparison_months, days_in_month, today
         )
 
     # Recurring projections for future days of current month (converted to primary currency)
