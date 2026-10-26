@@ -2154,6 +2154,7 @@
     "byIncome": "Por Receita",
     "byExpenses": "Por Despesa",
     "net": "Líquido",
+    "netFlow": "Fluxo líquido",
     "assetsAndAccounts": "Ativos e Contas",
     "youOwn": "Você Tem",
     "youOwe": "Você Deve",

@@ -2154,6 +2154,7 @@
     "byIncome": "Per entrate",
     "byExpenses": "Per spese",
     "net": "Netto",
+    "netFlow": "Flusso netto",
     "assetsAndAccounts": "Attività e Conti",
     "youOwn": "Hai",
     "youOwe": "Devi",

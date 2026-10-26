@@ -17,7 +17,9 @@ import {
   Tooltip,
   Legend,
   ReferenceLine,
+  Rectangle,
   ResponsiveContainer,
+  type BarShapeProps,
 } from 'recharts'
 import { AlertCircle, CalendarDays, ChevronLeft, ChevronRight, HelpCircle, X } from 'lucide-react'
 import { reports } from '@/lib/api'
@@ -32,6 +34,7 @@ import { useAuth } from '@/contexts/auth-context'
 import { useCollectionFilter } from '@/contexts/collection-filter-context'
 import type { ReportResponse, CategoryTrendItem } from '@/types'
 import { formatCurrency } from '@/lib/format'
+import { cashFlowBar, cashFlowTopSeries } from '@/lib/cash-flow-bars'
 import { localDateString, todayInTimezone } from '@/lib/date-utils'
 import { monthLabel } from '@/lib/month-utils'
 import { periodWindow, windowMonths, type PeriodPreset } from '@/lib/report-period'
@@ -438,8 +441,13 @@ export default function ReportsPage() {
       valuePast: isPast || isBoundary ? dp.value : null,
       valueForecast: !isPast ? dp.value : null,
       ...breakdowns,
-    } as Record<string, string | number | null>
+    } as Record<string, string | number | null> & { date: string }
   })
+  // Cash-flow columns are drawn as ranges ending at net flow; see cashFlowBar.
+  type BarChartDatum = Record<string, string | number | null | [number, number]> & { date: string }
+  const barChartData: BarChartDatum[] = chartData.map((point): BarChartDatum =>
+    meta?.type === 'cash_flow' ? { ...point, ...cashFlowBar(point.inflow, point.outflow) } : point,
+  )
   const netWorthDomain = getNetWorthDomain(
     chartData
       .map((point) => point.value)
@@ -1718,9 +1726,9 @@ export default function ReportsPage() {
             ) : chartData.length > 0 && meta ? (
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart
-                  data={chartData}
+                  data={barChartData}
                   margin={{ top: 8, right: 16, left: 0, bottom: 0 }}
-                  stackOffset="sign"
+                  stackOffset={meta.type === 'cash_flow' ? 'none' : 'sign'}
                   onClick={(payload) => {
                     const date = payload?.activeLabel as string | undefined
                     if (!date) return
@@ -1751,17 +1759,44 @@ export default function ReportsPage() {
                   <Tooltip
                     content={({ active, payload, label }) => {
                       if (!active || !payload) return null
-                      const items = payload.filter((p) => p.value !== null && p.value !== undefined && (p.value as number) !== 0)
-                      if (items.length === 0) return null
+                      const items = payload.filter((p) => {
+                        if (p.value === null || p.value === undefined) return false
+                        return Array.isArray(p.value)
+                          ? p.value[0] !== p.value[1]
+                          : (p.value as number) !== 0
+                      })
+                      const hovered = (payload.find((p) => p.payload)?.payload
+                        ?? barChartData.find((d) => d.date === label)) as BarChartDatum | undefined
+                      const cashFlowPoint = meta.type === 'cash_flow'
+                        ? cashFlowBar(hovered?.inflowAmount, hovered?.outflowAmount)
+                        : null
+                      if (items.length === 0 && !cashFlowPoint) return null
                       return (
                         <div style={tooltipStyle} className="px-3 py-2">
                           <p className="text-xs font-medium mb-1">{label}</p>
-                          {items.map((p) => (
-                            <p key={p.dataKey as string} className="text-xs" style={{ color: p.color }}>
-                              {t(`reports.${p.dataKey}`, { defaultValue: p.name })}:{' '}
-                              {privacyMode ? MASK : formatCurrency(p.value as number, userCurrency, locale)}
+                          {items.map((p) => {
+                            const dataKey = p.dataKey as string
+                            // Cash-flow bars carry ranges; show outflow as the negative amount it is.
+                            const value = cashFlowPoint
+                              ? dataKey === 'outflow' ? -cashFlowPoint.outflowAmount : cashFlowPoint.inflowAmount
+                              : p.value as number
+                            return (
+                              <p key={dataKey} className="text-xs" style={{ color: p.color }}>
+                                {t(`reports.${dataKey}`, { defaultValue: p.name })}:{' '}
+                                {privacyMode ? MASK : formatCurrency(value, userCurrency, locale)}
+                              </p>
+                            )
+                          })}
+                          {cashFlowPoint && (
+                            <p
+                              data-testid="cash-flow-net"
+                              className="text-xs font-medium"
+                              style={{ color: cashFlowPoint.netFlow >= 0 ? '#10B981' : '#F43F5E' }}
+                            >
+                              {t('reports.netFlow')}:{' '}
+                              {privacyMode ? MASK : formatCurrency(cashFlowPoint.netFlow, userCurrency, locale)}
                             </p>
-                          ))}
+                          )}
                         </div>
                       )
                     }}
@@ -1781,17 +1816,23 @@ export default function ReportsPage() {
                         ]
                       : meta.series_keys.map((k) => ({ key: k, color: colorMap[k] || '#6366F1' }))
                     const filteredSeries = allSeries.filter(({ key }) =>
-                      chartData.some((d) => { const v = d[key]; return typeof v === 'number' && v !== 0 })
+                      barChartData.some((d) => {
+                        const v = d[key]
+                        return Array.isArray(v)
+                          ? v[0] !== v[1]
+                          : typeof v === 'number' && v !== 0
+                      })
                     )
                     const positiveKeys = isNetWorth ? filteredSeries.filter(({ key }) => !NEGATIVE_SERIES.has(key)) : filteredSeries
                     const negativeKeys = isNetWorth ? filteredSeries.filter(({ key }) => NEGATIVE_SERIES.has(key)) : []
                     const lastPositiveKey = positiveKeys.at(-1)?.key ?? null
                     const lastNegativeKey = negativeKeys.at(-1)?.key ?? null
                     return filteredSeries.map(({ key, color }) => {
+                      const isCashFlowChart = meta.type === 'cash_flow'
                       let radius: [number, number, number, number] = [0, 0, 0, 0]
                       if (isNetWorth && NEGATIVE_SERIES.has(key) && key === lastNegativeKey) {
                         radius = [4, 4, 0, 0]
-                      } else if (key === lastPositiveKey) {
+                      } else if (!isCashFlowChart && key === lastPositiveKey) {
                         radius = [4, 4, 0, 0]
                       }
                       return (
@@ -1802,8 +1843,16 @@ export default function ReportsPage() {
                           fill={color}
                           radius={radius}
                           maxBarSize={32}
+                          shape={isCashFlowChart
+                            ? (props: BarShapeProps) => (
+                                <Rectangle
+                                  {...props}
+                                  radius={cashFlowTopSeries(props.payload) === key ? [4, 4, 0, 0] : 0}
+                                />
+                              )
+                            : undefined}
                         >
-                          {selectedDate && chartData.map((d) => (
+                          {selectedDate && barChartData.map((d) => (
                             <Cell
                               key={d.date}
                               fill={color}

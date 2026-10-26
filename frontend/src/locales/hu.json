@@ -2150,6 +2150,7 @@
     "byIncome": "Bevételek szerint",
     "byExpenses": "Kiadások szerint",
     "net": "Nettó",
+    "netFlow": "Nettó pénzáramlás",
     "assetsAndAccounts": "Eszközök és számlák",
     "youOwn": "Vagyonod",
     "youOwe": "Tartozásod",
