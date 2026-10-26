@@ -1120,7 +1120,9 @@ export default function DashboardPage() {
                         variant="outline"
                         size="sm"
                         disabled={availableComparisonMonths.filter((month) => month < selectedMonth).length === 0}
-                        aria-label={t('dashboard.compareMonths')}
+                        aria-label={comparisonMonths.length === 1
+                          ? monthLabel(comparisonMonths[0], uiLocale)
+                          : `${t('dashboard.compareMonths')} (${comparisonMonths.length})`}
                         className="h-7 gap-1.5 px-2 text-[11px] font-medium"
                       >
                         <CalendarIcon className="size-3.5" />

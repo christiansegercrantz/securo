@@ -226,7 +226,12 @@ describe('Dashboard balance comparisons', () => {
     )
   }
 
-  const selectorButton = () => screen.findByRole('button', { name: t('dashboard.compareMonths') })
+  const selectorButton = (singleMonth?: string) => screen.findByRole('button', {
+    name: singleMonth
+      ? month(singleMonth)
+      : (name) => name === t('dashboard.compareMonths')
+        || name.startsWith(`${t('dashboard.compareMonths')} (`),
+  })
 
   function mockHistory(overrides: Record<string, unknown>) {
     api.dashboard.balanceHistory.mockResolvedValue({
@@ -254,7 +259,7 @@ describe('Dashboard balance comparisons', () => {
     expect(await screen.findByText(
       t('dashboard.balanceFlowVsMonth', { day: 1, month: month('2026-02'), delta: signed(50) }),
     )).toBeInTheDocument()
-    expect(await selectorButton()).toHaveTextContent(month('2026-02'))
+    expect(await selectorButton('2026-02')).toHaveTextContent(month('2026-02'))
     // The legend shows the month itself, not the median wording.
     expect(screen.getAllByText(month('2026-02')).some((el) => !el.closest('button'))).toBe(true)
     expect(screen.queryByText(t('dashboard.balanceMedianLegend'))).not.toBeInTheDocument()
@@ -273,7 +278,7 @@ describe('Dashboard balance comparisons', () => {
 
     renderDashboard('/?month=2026-04&comparison_month=2026-03')
 
-    await waitFor(async () => expect(await selectorButton()).toHaveTextContent(month('2026-03')))
+    await waitFor(async () => expect(await selectorButton('2026-03')).toHaveTextContent(month('2026-03')))
     expect(await screen.findAllByText(month('2026-03'))).not.toHaveLength(0)
     // Day 2 has no comparison value, so there is no footer delta to show.
     expect(screen.queryByText(
@@ -335,7 +340,7 @@ describe('Dashboard balance comparisons', () => {
 
     // The options load after first paint, so the label settles asynchronously.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: t('dashboard.compareMonths') }))
+      expect(screen.getByRole('button', { name: (name) => name.startsWith(t('dashboard.compareMonths')) }))
         .toHaveTextContent(`${t('dashboard.compareMonths')} (2)`)
     })
     await waitFor(() => {
@@ -391,7 +396,7 @@ describe('Dashboard balance comparisons', () => {
     api.dashboard.balanceHistoryMonths.mockResolvedValue(['2026-01', '2026-02', '2026-03', '2026-04', '2026-05'])
 
     const { user } = renderDashboard('/?month=2026-04&comparison_month=2026-02')
-    await user.click(await selectorButton())
+    await user.click(await selectorButton('2026-02'))
 
     const boxes = await screen.findAllByRole('checkbox')
     expect(boxes.map((box) => box.closest('label')?.textContent)).toEqual([
@@ -410,7 +415,7 @@ describe('Dashboard balance comparisons', () => {
     api.dashboard.balanceHistoryMonths.mockResolvedValue(['2026-01', '2026-02', '2026-03'])
 
     const { user } = renderDashboard('/?month=2026-04&comparison_month=2026-02')
-    await user.click(await selectorButton())
+    await user.click(await selectorButton('2026-02'))
     await user.click(await screen.findByRole('checkbox', { name: month('2026-03') }))
 
     await waitFor(() => {
@@ -437,7 +442,7 @@ describe('Dashboard balance comparisons', () => {
         ['2026-02-01'],
       )
     })
-    expect(await selectorButton()).toHaveTextContent(month('2026-02'))
+    expect(await selectorButton('2026-02')).toHaveTextContent(month('2026-02'))
   })
 
   it('disables the selector when there are no earlier months to compare with', async () => {

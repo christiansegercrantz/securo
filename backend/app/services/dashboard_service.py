@@ -1562,6 +1562,7 @@ async def _daily_deltas(
     primary_currency_hint: Optional[str] = None,
     account_ids: Optional[list[uuid.UUID]] = None,
     include_pending: bool = False,
+    exclude_opening_balance: bool = False,
 ) -> dict[int, float]:
     """Get daily balance deltas for a date range [start, end), keyed by day-of-month."""
     by_date = await _daily_balance_deltas_by_date(
@@ -1572,6 +1573,7 @@ async def _daily_deltas(
         primary_currency_hint=primary_currency_hint,
         account_ids=account_ids,
         include_pending=include_pending,
+        exclude_opening_balance=exclude_opening_balance,
     )
     return {tx_date.day: amount for tx_date, amount in by_date.items()}
 
@@ -1750,6 +1752,7 @@ async def get_balance_history(
     current_deltas = await _daily_deltas(
         session, workspace_id, month_start, month_end,
         primary_currency_hint=primary_currency, account_ids=balance_account_ids,
+        exclude_opening_balance=True,
     )
 
     comparison = None
@@ -1773,6 +1776,7 @@ async def get_balance_history(
             comparison_end,
             primary_currency_hint=primary_currency,
             account_ids=balance_account_ids,
+            exclude_opening_balance=True,
         )
         if comparison_deltas:
             comparison = []

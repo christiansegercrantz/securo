@@ -1009,6 +1009,10 @@ async def test_balance_history_single_comparison_reuses_month_daily_balances(
         source="opening_balance",
     )
     await _add_txn(session, test_user.id, account.id, 50, "credit", date(2026, 2, 5))
+    await _add_txn(
+        session, test_user.id, account.id, 5000, "credit", date(2026, 2, 10),
+        source="opening_balance",
+    )
     await _add_txn(session, test_user.id, account.id, 5, "debit", date(2026, 2, 20))
 
     history = await get_balance_history(
@@ -1026,9 +1030,47 @@ async def test_balance_history_single_comparison_reuses_month_daily_balances(
     assert len(history.comparison) == 28
     assert history.comparison[0].balance == 1000.0
     assert history.comparison[4].balance == 1050.0
+    assert history.comparison[9].balance == 1050.0
     assert history.comparison[5].balance == 1050.0
     assert history.comparison[19].balance == 1045.0
     assert history.baseline == []
+
+
+@pytest.mark.asyncio
+async def test_midmonth_opening_balances_are_excluded_from_current_and_baseline(
+    session: AsyncSession, test_user, test_workspace
+):
+    account = await _make_account(session, test_user.id, "Opening balance consistency")
+    account.workspace_id = test_workspace.id
+    await session.commit()
+
+    for month, amount in ((1, 10), (2, 20), (3, 30), (4, 40)):
+        await _add_txn(
+            session, test_user.id, account.id, 1000, "credit", date(2026, month, 15),
+            source="opening_balance",
+        )
+        await _add_txn(
+            session, test_user.id, account.id, amount, "credit", date(2026, month, 20)
+        )
+
+    history = await get_balance_history(
+        session,
+        test_workspace.id,
+        test_user.id,
+        month=date(2026, 4, 1),
+        account_ids=[account.id],
+        comparison_months=[date(2026, month, 1) for month in (1, 2, 3)],
+    )
+
+    current_change = [
+        point.balance - history.opening_balance
+        for point in history.current
+        if point.balance is not None
+    ]
+    assert current_change[14] == 0.0
+    assert current_change[19] == 40.0
+    assert history.baseline[14].median == 0.0
+    assert history.baseline[19].median == 20.0
 
 
 @pytest.mark.asyncio
