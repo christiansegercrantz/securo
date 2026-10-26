@@ -453,3 +453,73 @@ describe('Dashboard balance comparisons', () => {
     expect(await selectorButton()).toBeDisabled()
   })
 })
+
+describe('Dashboard net worth without an FX rate', () => {
+  const renderDashboard = () => renderWithProviders(
+    <TooltipProvider delayDuration={0}>
+      <DashboardPage />
+    </TooltipProvider>,
+  )
+
+  it('flags the net worth total when the summary carried a fallback', async () => {
+    api.dashboard.summary.mockResolvedValue({ ...summary, fx_fallback: true })
+    renderDashboard()
+
+    await screen.findByText(formatCurrency(500, 'USD', 'en-US'))
+    expect(screen.getByText(t('transactions.fxFallbackBanner'))).toBeInTheDocument()
+  })
+
+  it('keeps the net worth quiet when every bucket was converted', async () => {
+    renderDashboard()
+
+    await screen.findByText('Checking')
+    expect(screen.queryByText(t('transactions.fxFallbackBanner'))).not.toBeInTheDocument()
+  })
+})
+
+describe('Dashboard refresh button', () => {
+  it('refetches page data when the refresh button is clicked', async () => {
+    const { user, queryClient } = renderWithProviders(
+      <TooltipProvider delayDuration={0}>
+        <DashboardPage />
+      </TooltipProvider>,
+    )
+
+    const refetch = vi.spyOn(queryClient, 'refetchQueries')
+
+    const button = screen.getByRole('button', { name: 'Refresh' })
+    await user.click(button)
+
+    expect(refetch).toHaveBeenCalledTimes(1)
+    // Only the queries on screen: a refresh must not refetch every page visited earlier.
+    expect(refetch).toHaveBeenCalledWith({ type: 'active' })
+  })
+
+  it('refreshes comparison data without losing the selected months', async () => {
+    api.dashboard.balanceHistoryMonths.mockResolvedValue(['2026-02', '2026-03'])
+    const { user } = renderWithProviders(
+      <TooltipProvider delayDuration={0}>
+        <LocationProbe />
+        <DashboardPage />
+      </TooltipProvider>,
+      { route: '/?month=2026-04&comparison_month=2026-02' },
+    )
+
+    await waitFor(() => expect(api.dashboard.balanceHistory).toHaveBeenLastCalledWith(
+      '2026-04-01', undefined, ['2026-02-01'],
+    ))
+    const historyCalls = api.dashboard.balanceHistory.mock.calls.length
+    const monthOptionsCalls = api.dashboard.balanceHistoryMonths.mock.calls.length
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+
+    await waitFor(() => {
+      expect(api.dashboard.balanceHistory.mock.calls.length).toBeGreaterThan(historyCalls)
+      expect(api.dashboard.balanceHistoryMonths.mock.calls.length).toBeGreaterThan(monthOptionsCalls)
+    })
+    expect(api.dashboard.balanceHistory).toHaveBeenLastCalledWith(
+      '2026-04-01', undefined, ['2026-02-01'],
+    )
+    expect(screen.getByTestId('location-search')).toHaveTextContent('comparison_month=2026-02')
+  })
+})
