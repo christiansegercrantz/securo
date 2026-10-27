@@ -569,16 +569,26 @@ describe('Reports page, cash-flow bars end at net flow (issue #1241)', () => {
 
   // jsdom has no layout, which leaves Recharts unable to map the pointer to a
   // period. Give the chart the same box the test viewport renders it at.
-  async function hoverColumn(chart: HTMLElement, column: Column) {
+  function hoverAt(chart: HTMLElement, clientX: number) {
     Object.defineProperties(chart, {
       offsetWidth: { configurable: true, value: 800 },
       offsetHeight: { configurable: true, value: 300 },
       getBoundingClientRect: { configurable: true, value: () => DOMRect.fromRect({ width: 800, height: 300 }) },
     })
-    fireEvent.mouseMove(chart, { clientX: column.x + column.width / 2, clientY: 100 })
-    const tooltip = chart.querySelector<HTMLElement>('.recharts-tooltip-wrapper')!
+    fireEvent.mouseMove(chart, { clientX, clientY: 100 })
+    return chart.querySelector<HTMLElement>('.recharts-tooltip-wrapper')!
+  }
+
+  async function hoverColumn(chart: HTMLElement, column: Column) {
+    const tooltip = hoverAt(chart, column.x + column.width / 2)
     await waitFor(() => expect(tooltip).not.toBeEmptyDOMElement())
     return tooltip
+  }
+
+  function periodX(chart: HTMLElement, date: string) {
+    const tick = Array.from(chart.querySelectorAll('.recharts-xAxis-tick-labels text'))
+      .find((text) => text.textContent === date)!
+    return Number(tick.getAttribute('x'))
   }
 
   it('ends a surplus above zero, a deficit below it and break-even exactly on it', async () => {
@@ -660,7 +670,50 @@ describe('Reports page, cash-flow bars end at net flow (issue #1241)', () => {
     })
 
     const tooltip = await hoverColumn(chart, column)
-    expect(within(tooltip).getByText(`${t('reports.netFlow')}: $0.00`)).toHaveStyle({ color: INFLOW_COLOR })
+    expect(within(tooltip).getByText(`${t('reports.netFlow')}: $0.00`)).toHaveStyle({ color: 'var(--muted-foreground)' })
+  })
+
+  it('leaves a month with no cash flow empty, without a bar or a tooltip', async () => {
+    const chart = await openCashFlowBars([
+      ['2026-10-01', 3000, 2500],
+      ['2026-11-01', 0, 0],
+      ['2026-12-01', 2500, 3000],
+    ])
+    let surplus!: Column
+    await waitFor(() => {
+      const drawn = columns(chart)
+      expect(drawn.map(({ x, width }) => x + width / 2)).toEqual([
+        periodX(chart, '2026-10-01'),
+        periodX(chart, '2026-12-01'),
+      ])
+      ;[surplus] = drawn
+    })
+
+    const tooltip = await hoverColumn(chart, surplus)
+    expect(tooltip).toHaveTextContent('2026-10-01')
+
+    hoverAt(chart, periodX(chart, '2026-11-01'))
+    await waitFor(() => expect(tooltip).toBeEmptyDOMElement())
+  })
+
+  it('draws no bars and no tooltip when the whole range has no cash flow', async () => {
+    api.reports.cashFlow.mockResolvedValue(report('cash_flow', [
+      { date: '2026-10-01', breakdowns: { inflow: 0, outflow: 0 } },
+      { date: '2026-11-01', breakdowns: { inflow: 0, outflow: 0 } },
+    ]))
+    const container = await openTab('reports.cashFlow')
+    // The balance projection is the tab's area chart; the other one holds the bars.
+    const chart = await waitFor(() => {
+      const found = Array.from(container.querySelectorAll<HTMLElement>('.recharts-wrapper'))
+        .find((wrapper) => !wrapper.querySelector('.recharts-area') && wrapper.querySelector('.recharts-xAxis-tick-labels text'))
+      expect(found).toBeDefined()
+      return found!
+    })
+
+    expect(chart.querySelectorAll('.recharts-bar-rectangle path')).toHaveLength(0)
+    const tooltip = hoverAt(chart, periodX(chart, '2026-10-01'))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(tooltip).toBeEmptyDOMElement()
   })
 
   it('masks every tooltip amount in privacy mode', async () => {

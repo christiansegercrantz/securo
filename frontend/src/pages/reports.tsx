@@ -1765,12 +1765,16 @@ export default function ReportsPage() {
                           ? p.value[0] !== p.value[1]
                           : (p.value as number) !== 0
                       })
-                      const hovered = (payload.find((p) => p.payload)?.payload
-                        ?? barChartData.find((d) => d.date === label)) as BarChartDatum | undefined
+                      // A period with nothing to draw, e.g. a month with no
+                      // cash flow at all, gets no tooltip.
+                      if (items.length === 0) return null
+                      const hovered = items[0].payload as BarChartDatum
                       const cashFlowPoint = meta.type === 'cash_flow'
-                        ? cashFlowBar(hovered?.inflowAmount, hovered?.outflowAmount)
+                        ? cashFlowBar(hovered.inflowAmount, hovered.outflowAmount)
                         : null
-                      if (items.length === 0 && !cashFlowPoint) return null
+                      const netFlowColor = !cashFlowPoint || cashFlowPoint.netFlow === 0
+                        ? 'var(--muted-foreground)'
+                        : cashFlowPoint.netFlow > 0 ? '#10B981' : '#F43F5E'
                       return (
                         <div style={tooltipStyle} className="px-3 py-2">
                           <p className="text-xs font-medium mb-1">{label}</p>
@@ -1791,7 +1795,7 @@ export default function ReportsPage() {
                             <p
                               data-testid="cash-flow-net"
                               className="text-xs font-medium"
-                              style={{ color: cashFlowPoint.netFlow >= 0 ? '#10B981' : '#F43F5E' }}
+                              style={{ color: netFlowColor }}
                             >
                               {t('reports.netFlow')}:{' '}
                               {privacyMode ? MASK : formatCurrency(cashFlowPoint.netFlow, userCurrency, locale)}
