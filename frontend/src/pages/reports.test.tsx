@@ -661,6 +661,43 @@ describe('Reports page, cash-flow bars end at net flow (issue #1241)', () => {
     expect(within(tooltip).getByText(`${t('reports.netFlow')}: $500.00`)).toHaveStyle({ color: INFLOW_COLOR })
   })
 
+  it('lists both amounts in the tooltip when a period has only one of them', async () => {
+    const chart = await openCashFlowBars([
+      ['2026-10-01', 1200, 0],
+      ['2026-11-01', 0, 800],
+    ])
+    let inflowOnly!: Column
+    let outflowOnly!: Column
+    await waitFor(() => {
+      ;[inflowOnly, outflowOnly] = columns(chart)
+      expect(outflowOnly).toBeDefined()
+    })
+
+    let tooltip = await hoverColumn(chart, inflowOnly)
+    expect(within(tooltip).getByText(`${t('reports.inflow')}: $1,200.00`)).toBeInTheDocument()
+    expect(within(tooltip).getByText(`${t('reports.outflow')}: $0.00`)).toHaveStyle({ color: OUTFLOW_COLOR })
+    expect(within(tooltip).getByText(`${t('reports.netFlow')}: $1,200.00`)).toBeInTheDocument()
+
+    tooltip = await hoverColumn(chart, outflowOnly)
+    await waitFor(() => expect(tooltip).toHaveTextContent('2026-11-01'))
+    expect(within(tooltip).getByText(`${t('reports.inflow')}: $0.00`)).toHaveStyle({ color: INFLOW_COLOR })
+    expect(within(tooltip).getByText(`${t('reports.outflow')}: -$800.00`)).toBeInTheDocument()
+    expect(within(tooltip).getByText(`${t('reports.netFlow')}: -$800.00`)).toBeInTheDocument()
+  })
+
+  it('lists the outflow in the tooltip even when the range has none to draw', async () => {
+    const chart = await openCashFlowBars([['2026-10-01', 1200, 0]])
+    let column!: Column
+    await waitFor(() => {
+      ;[column] = columns(chart)
+      expect(column.inflow).toBeDefined()
+    })
+    expect(column.outflow).toBeUndefined()
+
+    const tooltip = await hoverColumn(chart, column)
+    expect(within(tooltip).getByText(`${t('reports.outflow')}: $0.00`)).toBeInTheDocument()
+  })
+
   it('shows a zero net flow in the tooltip for a break-even period', async () => {
     const chart = await openCashFlowBars([['2026-10-01', 2000, 2000]])
     let column!: Column

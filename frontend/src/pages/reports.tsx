@@ -1775,22 +1775,29 @@ export default function ReportsPage() {
                       const netFlowColor = !cashFlowPoint || cashFlowPoint.netFlow === 0
                         ? 'var(--muted-foreground)'
                         : cashFlowPoint.netFlow > 0 ? '#10B981' : '#F43F5E'
+                      // Cash-flow bars carry ranges, and a zero-height segment
+                      // drops out of `items`; list both amounts from the period
+                      // itself so the net flow always has both of its terms.
+                      const rows = cashFlowPoint
+                        ? [
+                            { key: 'inflow', name: 'inflow', color: '#10B981', value: cashFlowPoint.inflowAmount },
+                            { key: 'outflow', name: 'outflow', color: '#F43F5E', value: -cashFlowPoint.outflowAmount },
+                          ]
+                        : items.map((p) => ({
+                            key: p.dataKey as string,
+                            name: p.name,
+                            color: p.color,
+                            value: p.value as number,
+                          }))
                       return (
                         <div style={tooltipStyle} className="px-3 py-2">
                           <p className="text-xs font-medium mb-1">{label}</p>
-                          {items.map((p) => {
-                            const dataKey = p.dataKey as string
-                            // Cash-flow bars carry ranges; show outflow as the negative amount it is.
-                            const value = cashFlowPoint
-                              ? dataKey === 'outflow' ? -cashFlowPoint.outflowAmount : cashFlowPoint.inflowAmount
-                              : p.value as number
-                            return (
-                              <p key={dataKey} className="text-xs" style={{ color: p.color }}>
-                                {t(`reports.${dataKey}`, { defaultValue: p.name })}:{' '}
-                                {privacyMode ? MASK : formatCurrency(value, userCurrency, locale)}
-                              </p>
-                            )
-                          })}
+                          {rows.map((row) => (
+                            <p key={row.key} className="text-xs" style={{ color: row.color }}>
+                              {t(`reports.${row.key}`, { defaultValue: row.name })}:{' '}
+                              {privacyMode ? MASK : formatCurrency(row.value, userCurrency, locale)}
+                            </p>
+                          ))}
                           {cashFlowPoint && (
                             <p
                               data-testid="cash-flow-net"
