@@ -12,6 +12,7 @@
 [tools]
 uv = "latest"
 gh = "latest"
+prek = "latest"
 
 [vars]
 securo_backup_container = "securo-backup"
