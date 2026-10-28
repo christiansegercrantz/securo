@@ -1,0 +1,473 @@
+# =============================================================================
+# Securo — personal backup infrastructure
+# Personal machine configuration. Do not commit this file.
+#
+# Provision with:
+#   mise bootstrap --only task --dry-run
+#   mise bootstrap --only task --yes
+#
+# This configuration intentionally does not modify the shared mise.toml.
+# =============================================================================
+
+[tools]
+uv = "latest"
+gh = "latest"
+
+[vars]
+securo_backup_container = "securo-backup"
+securo_local_repo = "~/storage/backups/securo-restic"
+securo_b2_repo = "s3:s3.eu-central-003.backblazeb2.com/securo-backup"
+securo_backup_config = "~/.config/securo-backup"
+
+# =============================================================================
+# Bootstrap
+# =============================================================================
+
+[tasks.bootstrap]
+description = "Provision and verify the Securo backup infrastructure"
+run = '''
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+CONFIG_DIR="$HOME/.config/securo-backup"
+LOCAL_REPO="$HOME/storage/backups/securo-restic"
+B2_REPO="s3:s3.eu-central-003.backblazeb2.com/securo-backup"
+BACKUP_SCRIPT="$HOME/.local/bin/securo-backup"
+CHECK_SCRIPT="$HOME/.local/bin/securo-backup-check"
+
+echo "==> Checking host prerequisites"
+
+for command in podman toolbox systemctl loginctl; do
+    command -v "$command" >/dev/null || {
+        echo "Missing required command: $command" >&2
+        exit 1
+    }
+done
+
+echo "==> Creating protected directories"
+
+mkdir -p \
+    "$HOME/storage/backups" \
+    "$HOME/storage/archives" \
+    "$HOME/.config/securo-backup" \
+    "$HOME/.local/bin" \
+    "$HOME/.config/systemd/user"
+
+chmod 700 \
+    "$HOME/storage/backups" \
+    "$HOME/.config/securo-backup" \
+    "$HOME/.local/bin"
+
+echo "==> Checking credentials"
+
+for file in \
+    "$CONFIG_DIR/b2.env" \
+    "$CONFIG_DIR/local-restic-password" \
+    "$CONFIG_DIR/b2-restic-password"; do
+    if [[ ! -s "$file" ]]; then
+        echo "Missing or empty credential file: $file" >&2
+        exit 1
+    fi
+    chmod 600 "$file"
+done
+
+echo "==> Checking existing backup script"
+
+if [[ ! -x "$BACKUP_SCRIPT" ]]; then
+    echo "Existing backup script is missing or not executable:"
+    echo "$BACKUP_SCRIPT"
+    exit 1
+fi
+
+echo "==> Preparing Restic Toolbox"
+
+if ! podman container exists securo-backup; then
+    toolbox create --container securo-backup
+fi
+
+if ! toolbox run --container securo-backup \
+    sh -lc 'command -v restic >/dev/null 2>&1'; then
+    toolbox run --container securo-backup \
+        sudo dnf install -y restic
+fi
+
+toolbox run --container securo-backup restic version
+
+echo "==> Checking repository configuration"
+
+if [[ ! -f "$LOCAL_REPO/config" ]]; then
+    echo "Local Restic repository is not initialized." >&2
+    echo "Refusing to initialize automatically." >&2
+    exit 1
+fi
+
+set -a
+source "$CONFIG_DIR/b2.env"
+set +a
+
+: "${AWS_ACCESS_KEY_ID:?Missing B2 access key}"
+: "${AWS_SECRET_ACCESS_KEY:?Missing B2 secret key}"
+
+toolbox run --container securo-backup \
+    restic -r "$LOCAL_REPO" \
+    --password-file "$CONFIG_DIR/local-restic-password" \
+    snapshots >/dev/null
+
+toolbox run --container securo-backup \
+    env \
+    AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+    AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+    restic -r "$B2_REPO" \
+    --password-file "$CONFIG_DIR/b2-restic-password" \
+    snapshots >/dev/null
+
+echo "==> Installing backup integrity-check script"
+
+cat > "$CHECK_SCRIPT" <<'SCRIPT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CONFIG_DIR="$HOME/.config/securo-backup"
+LOCAL_REPO="$HOME/storage/backups/securo-restic"
+B2_REPO="s3:s3.eu-central-003.backblazeb2.com/securo-backup"
+
+set -a
+source "$CONFIG_DIR/b2.env"
+set +a
+
+: "${AWS_ACCESS_KEY_ID:?Missing B2 access key}"
+: "${AWS_SECRET_ACCESS_KEY:?Missing B2 secret key}"
+
+echo "==> Checking local Restic repository"
+
+toolbox run --container securo-backup \
+    restic -r "$LOCAL_REPO" \
+    --password-file "$CONFIG_DIR/local-restic-password" \
+    check
+
+echo "==> Checking Backblaze B2 repository"
+
+toolbox run --container securo-backup \
+    env \
+    AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+    AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+    restic -r "$B2_REPO" \
+    --password-file "$CONFIG_DIR/b2-restic-password" \
+    check
+
+echo "==> Both backup repositories passed integrity checks"
+SCRIPT
+
+chmod 700 "$CHECK_SCRIPT"
+
+echo "==> Installing systemd service units"
+
+cat > "$HOME/.config/systemd/user/securo-backup.service" <<'UNIT'
+[Unit]
+Description=Securo encrypted backup
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/securo-backup
+TimeoutStartSec=infinity
+UNIT
+
+cat > "$HOME/.config/systemd/user/securo-backup.timer" <<'UNIT'
+[Unit]
+Description=Daily Securo encrypted backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=securo-backup.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+cat > "$HOME/.config/systemd/user/securo-backup-check.service" <<'UNIT'
+[Unit]
+Description=Check Securo backup repositories
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/securo-backup-check
+TimeoutStartSec=infinity
+UNIT
+
+cat > "$HOME/.config/systemd/user/securo-backup-check.timer" <<'UNIT'
+[Unit]
+Description=Weekly Securo backup integrity check
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=securo-backup-check.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+echo "==> Ensuring user services survive logout"
+
+if ! loginctl show-user "$USER" -p Linger --value | grep -qx yes; then
+    sudo loginctl enable-linger "$USER"
+fi
+
+echo "==> Enabling backup timers"
+
+systemctl --user daemon-reload
+
+systemctl --user enable --now securo-backup.timer
+systemctl --user enable --now securo-backup-check.timer
+
+echo "==> Bootstrap completed"
+
+systemctl --user list-timers \
+    securo-backup.timer \
+    securo-backup-check.timer \
+    --all
+'''
+
+# =============================================================================
+# Operational tasks
+# =============================================================================
+
+[tasks."securo:backup"]
+description = "Run a Securo backup"
+run = "~/.local/bin/securo-backup"
+
+[tasks."securo:backup:check"]
+description = "Run integrity checks against both repositories"
+run = '''
+systemctl --user start securo-backup-check.service
+'''
+
+[tasks."securo:backup:status"]
+description = "Show backup timers and repository snapshots"
+run = '''
+set -Eeuo pipefail
+
+echo "==> Backup timers"
+systemctl --user list-timers \
+    securo-backup.timer \
+    securo-backup-check.timer \
+    --all
+
+echo "==> Local repository"
+toolbox run --container securo-backup \
+    restic \
+    -r "$HOME/storage/backups/securo-restic" \
+    --password-file "$HOME/.config/securo-backup/local-restic-password" \
+    snapshots
+
+echo "==> Backblaze B2 repository"
+
+set -a
+source "$HOME/.config/securo-backup/b2.env"
+set +a
+
+toolbox run --container securo-backup \
+    env \
+    AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+    AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+    restic \
+    -r "s3:s3.eu-central-003.backblazeb2.com/securo-backup" \
+    --password-file "$HOME/.config/securo-backup/b2-restic-password" \
+    snapshots
+'''
+
+
+# =============================================================================
+# Database / debugging
+# =============================================================================
+
+[tasks."db:psql"]
+description = "Open an interactive psql shell in the running production db container"
+run = '''
+set -Eeuo pipefail
+cid="$(podman ps -q --filter label=io.podman.compose.service=db | head -n1)"
+[[ -n "$cid" ]] || { echo "db container is not running (try: mise run containers:rebuild)" >&2; exit 1; }
+podman exec -it "$cid" psql -U postgres -d securo
+'''
+
+[tasks."debug:eb-pending"]
+description = "Show recent Enable Banking transactions with raw pending/booked fields"
+run = '''
+set -Eeuo pipefail
+cid="$(podman ps -q --filter label=io.podman.compose.service=db | head -n1)"
+[[ -n "$cid" ]] || { echo "db container is not running (try: mise run containers:rebuild)" >&2; exit 1; }
+podman exec -i "$cid" psql -U postgres -d securo -P pager=off -x <<'SQL'
+SELECT t.date, t.status, t.description, t.payee, t.external_id,
+       t.raw_data->>'entry_reference'       AS entry_ref,
+       t.raw_data->>'status'                AS eb_status,
+       t.raw_data->>'transaction_date'      AS txn_date,
+       t.raw_data->>'booking_date'          AS booking_date,
+       t.raw_data->>'value_date'            AS value_date,
+       t.raw_data->'remittance_information' AS remittance,
+       t.raw_data->'creditor'               AS creditor,
+       t.raw_data->>'additional_information' AS additional_info
+FROM transactions t
+JOIN accounts a ON a.id = t.account_id
+JOIN bank_connections c ON c.id = a.connection_id
+WHERE c.provider = 'enable_banking' AND t.source = 'sync'
+ORDER BY t.date DESC, t.amount
+LIMIT 40;
+SQL
+'''
+
+[tasks."debug:eb-live"]
+description = "Read-only: fetch the live Enable Banking feed (pending + booked) for the last N days (default 10)"
+usage = 'arg "[days]" default="10"'
+run = '''
+set -Eeuo pipefail
+cid="$(podman ps -q --filter label=io.podman.compose.service=backend | head -n1)"
+[[ -n "$cid" ]] || { echo "backend container is not running" >&2; exit 1; }
+podman exec -i -e EB_DAYS="${usage_days:-10}" "$cid" python - <<'PY'
+import asyncio, json, os
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import select
+from app.core.database import async_session_maker
+from app.models.account import Account
+from app.models.bank_connection import BankConnection
+from app.providers.enable_banking import EnableBankingProvider
+
+KEYS = ("status", "entry_reference", "transaction_id", "transaction_date", "booking_date",
+        "value_date", "credit_debit_indicator", "remittance_information", "creditor",
+        "debtor", "additional_information", "bank_transaction_code", "reference_number")
+
+def slim(raw):
+    out = {k: raw.get(k) for k in KEYS if raw.get(k) not in (None, "", [])}
+    for party in ("creditor", "debtor"):
+        if isinstance(out.get(party), dict):
+            out[party] = out[party].get("name")
+    return out
+
+async def main():
+    days = int(os.environ["EB_DAYS"])
+    today = datetime.now(timezone.utc).date()
+    provider = EnableBankingProvider()
+    async with async_session_maker() as s:
+        rows = (await s.execute(
+            select(Account.name, Account.external_id)
+            .join(BankConnection, BankConnection.id == Account.connection_id)
+            .where(BankConnection.provider == "enable_banking", Account.is_closed.is_(False))
+        )).all()
+    for name, uid in rows:
+        page = await provider._request("GET", f"/accounts/{uid}/transactions", params={
+            "date_from": (today - timedelta(days=days)).isoformat(),
+            "date_to": today.isoformat(),
+        })
+        groups = defaultdict(list)
+        for raw, status in provider._iter_transactions(page):
+            amt = raw.get("transaction_amount") or {}
+            key = f'{raw.get("credit_debit_indicator")} {amt.get("amount")} {amt.get("currency")}'
+            groups[key].append({"parsed_as": status, **slim(raw)})
+        print(f"\n######## {name} ({uid}) — shape: {type(page.get('transactions')).__name__}")
+        for key, items in sorted(groups.items()):
+            flag = "  <-- has pending" if any(i["parsed_as"] == "pending" for i in items) else ""
+            print(f"\n=== {key}{flag}")
+            for i in items:
+                print("  " + json.dumps(i, ensure_ascii=False, default=str))
+
+asyncio.run(main())
+PY
+'''
+
+[tasks."containers:rebuild"]
+description = "Rebuild local images, pull upstream images, and recreate all production containers"
+dir = "{{ config_root }}"
+run = """
+set -eu
+podman build -t ghcr.io/securo-finance/securo-backend:latest ./backend
+podman build -t ghcr.io/securo-finance/securo-frontend:latest ./frontend
+podman-compose -f docker-compose.prod.yml pull db redis
+podman-compose -f docker-compose.prod.yml --profile agents up -d --force-recreate
+"""
+
+# =============================================================================
+# Cloudflare Tunnel
+# =============================================================================
+
+[tasks."tunnel:update"]
+description = "Pull the latest cloudflared image and recreate the tunnel container (rolls back on failure)"
+run = '''
+{% raw %}
+set -Eeuo pipefail
+name="cloudflared-securo"
+old="$name-old"
+image="docker.io/cloudflare/cloudflared:latest"
+
+podman container exists "$name" || { echo "$name container does not exist" >&2; exit 1; }
+
+echo "==> Current: $(podman exec "$name" cloudflared --version 2>/dev/null || echo unknown)"
+podman pull -q "$image" >/dev/null
+echo "==> Latest:  $(podman run --rm "$image" --version)"
+
+if [[ "$(podman inspect "$name" --format '{{.Image}}')" == "$(podman image inspect "$image" --format '{{.Id}}')" ]]; then
+    echo "==> Already running the latest image, nothing to do"
+    exit 0
+fi
+
+token="$(podman inspect "$name" --format '{{index .Config.Cmd 4}}')"
+[[ "$token" == eyJ* ]] || { echo "Could not read tunnel token from $name, aborting" >&2; exit 1; }
+
+echo "==> Recreating $name (previous container kept as $old)"
+podman rm -f "$old" >/dev/null 2>&1 || true
+podman rename "$name" "$old"
+podman stop -t 10 "$old" >/dev/null
+podman run -d --name "$name" --restart=unless-stopped --network=host \
+    "$image" tunnel --no-autoupdate run --token "$token" >/dev/null
+unset token
+
+for _ in $(seq 30); do
+    if podman logs "$name" 2>&1 | grep -q "Registered tunnel connection"; then
+        echo "==> Tunnel connected: $(podman exec "$name" cloudflared --version)"
+        echo "    Remove the fallback when satisfied: podman rm $old"
+        exit 0
+    fi
+    sleep 1
+done
+
+echo "==> New tunnel did not connect within 30s, rolling back" >&2
+podman logs --tail 20 "$name" >&2 || true
+podman rm -f "$name" >/dev/null
+podman rename "$old" "$name"
+podman start "$name" >/dev/null
+exit 1
+{% endraw %}
+'''
+
+# =============================================================================
+# Local config (this file lives on the fork's local-config branch)
+# =============================================================================
+
+[tasks."local-config:setup"]
+description = "One-time device setup: link mise.local.toml from the local-config worktree"
+dir = "{{ config_root }}"
+run = "bash ../securo-local-config/setup-device.sh"
+
+[tasks."local-config:save"]
+description = "Commit and push changes to mise.local.toml on the fork's local-config branch"
+run = '''
+set -Eeuo pipefail
+cd "$(dirname "$(readlink -f "{{ config_root }}/mise.local.toml")")"
+if git diff --quiet; then
+    echo "==> No changes to save"
+    exit 0
+fi
+PREK_ALLOW_NO_CONFIG=1 git commit -am "chore: update mise.local.toml"
+git push
+'''
+
+[tasks."local-config:pull"]
+description = "Pull mise.local.toml changes made on other devices"
+run = '''
+set -Eeuo pipefail
+cd "$(dirname "$(readlink -f "{{ config_root }}/mise.local.toml")")"
+git pull --ff-only
+'''
