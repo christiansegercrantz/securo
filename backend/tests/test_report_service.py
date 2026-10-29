@@ -1721,8 +1721,9 @@ async def test_cash_flow_weekly_recurring(session: AsyncSession, test_user, test
 
     report = await get_cash_flow_report(session, test_workspace.id, test_user.id, months=1, interval="daily")
     proj_exp = next(b for b in report.summary.breakdowns if b.key == "projectedExpenses")
-    # ~4-5 weekly occurrences in 1 month
-    assert 240.0 <= proj_exp.value <= 480.0
+    # One occurrence a week from tomorrow up to the month-end horizon.
+    occurrences = (_cash_flow_forecast_days(1) - 1) // 7 + 1
+    assert proj_exp.value == 80.0 * occurrences
 
 
 @pytest.mark.asyncio
@@ -2664,6 +2665,14 @@ async def test_cash_flow_baseline_off_uses_recurring(
     assert proj_exp.value == 0.0
 
 
+def _cash_flow_forecast_days(months: int) -> int:
+    """Days from tomorrow to the month-end horizon get_cash_flow_report projects to."""
+    today = date.today()
+    end_month = _add_months(today.replace(day=1), months)
+    end = end_month.replace(day=calendar.monthrange(end_month.year, end_month.month)[1])
+    return (end - today).days
+
+
 @pytest.mark.asyncio
 async def test_cash_flow_baseline_on_replaces_recurring_with_mean(
     session: AsyncSession, test_user, test_workspace: User
@@ -2704,9 +2713,8 @@ async def test_cash_flow_baseline_on_replaces_recurring_with_mean(
     proj_exp = next(b for b in report.summary.breakdowns if b.key == "projectedExpenses")
     # Recurring R$9999 credit should NOT appear (baseline replaces recurring).
     assert proj_income.value < 100.0
-    # Outflow should reflect ~R$100/day × 3 months ≈ R$9000.
-    assert proj_exp.value > 8000.0
-    assert proj_exp.value < 10000.0
+    # Outflow is R$100/day for every forecast day up to the month-end horizon.
+    assert proj_exp.value == pytest.approx(100.0 * _cash_flow_forecast_days(3), abs=0.01)
 
 
 @pytest.mark.asyncio
@@ -2765,9 +2773,8 @@ async def test_cash_flow_baseline_lookback_adapts_to_short_history(
     # Earliest tx is 7 days ago, so lookback is 7 days.
     assert report.meta.baseline_lookback_days == 7
     proj_exp = next(b for b in report.summary.breakdowns if b.key == "projectedExpenses")
-    # 7 days × R$20 = R$140 over 7 days → R$20/day → ~R$1820 over ~91 days.
-    assert proj_exp.value > 1500.0
-    assert proj_exp.value < 2200.0
+    # 7 days × R$20 = R$140 over 7 days → R$20/day for every forecast day.
+    assert proj_exp.value == pytest.approx(20.0 * _cash_flow_forecast_days(3), abs=0.01)
 
 
 @pytest.mark.asyncio
