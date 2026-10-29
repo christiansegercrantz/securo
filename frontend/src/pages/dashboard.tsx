@@ -1288,11 +1288,11 @@ export default function DashboardPage() {
                         {...props}
                         payload={payload.map((entry) => entry.dataKey === 'current' && typeof entry.value === 'number'
                           ? {
-                              ...entry,
-                              color: entry.value === 0
-                                ? 'var(--muted-foreground)'
-                                : entry.value > 0 ? '#10B981' : '#F43F5E',
-                            }
+                            ...entry,
+                            color: entry.value === 0
+                              ? 'var(--muted-foreground)'
+                              : entry.value > 0 ? '#10B981' : '#F43F5E',
+                          }
                           : entry)}
                       />
                     )}
@@ -1363,9 +1363,11 @@ export default function DashboardPage() {
             const footerDay = hoveredDay ?? lastDay
             const point = cumulativeData.find(d => d.day === footerDay)
             const comparisonValue = comparisonMonths.length === 1 ? point?.comparison : point?.median
-            const footerDelta = point?.current != null && comparisonValue != null
+            const rawDelta = point?.current != null && comparisonValue != null
               ? point.current - comparisonValue
               : null
+            const formattedDelta = rawDelta == null ? '' : formatCurrency(Math.abs(rawDelta), userCurrency, locale)
+            const footerDelta = formattedDelta === formatCurrency(0, userCurrency, locale) ? 0 : rawDelta
             return (
               <div className="h-20 overflow-y-auto px-5 pb-4 pt-0 shrink-0">
                 {point && footerDelta != null && (
@@ -1375,7 +1377,7 @@ export default function DashboardPage() {
                       day: point.day,
                       month: monthLabel(comparisonMonths[0], uiLocale),
                       median: mask(formatCurrency(comparisonValue, userCurrency, locale)),
-                      delta: mask(formatCurrency(Math.abs(footerDelta), userCurrency, locale)),
+                      delta: mask(formattedDelta),
                     })}
                     {footerDelta !== 0 && (
                       <>

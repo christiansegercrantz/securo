@@ -43,8 +43,10 @@ vi.mock('@/hooks/use-privacy-mode', () => ({
   usePrivacyMode: () => ({ mask: (value: string) => value, privacyMode: false, MASK: '••••' }),
 }))
 
+const preferences = vi.hoisted(() => ({ currency_display: 'USD' }))
+
 vi.mock('@/contexts/auth-context', () => ({
-  useAuth: () => ({ user: { preferences: { currency_display: 'USD' } } }),
+  useAuth: () => ({ user: { preferences } }),
 }))
 
 vi.mock('@/contexts/collection-filter-context', () => ({
@@ -129,6 +131,7 @@ const summary: DashboardSummary = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  preferences.currency_display = 'USD'
   api.dashboard.summary.mockResolvedValue(summary)
   api.dashboard.spendingByCategory.mockResolvedValue([])
   api.dashboard.balanceHistory.mockResolvedValue({
@@ -529,6 +532,49 @@ describe('Dashboard balance comparisons', () => {
     expect(await screen.findByText(
       `Day 1: cumulative change ${expected}.`,
     )).toBeInTheDocument()
+  })
+
+  it.each(['median', 'single month'])('uses currency display precision for the %s footer direction', async (mode) => {
+    api.dashboard.balanceHistoryMonths.mockResolvedValue(['2026-02', '2026-03'])
+    const singleMonth = mode === 'single month'
+    const { queryClient, container } = renderDashboard(singleMonth
+      ? '/?month=2026-04&comparison_month=2026-02'
+      : '/?month=2026-04&comparison_month=2026-02&comparison_month=2026-03')
+    await waitFor(() => expect(api.dashboard.balanceHistory).toHaveBeenCalled())
+
+    for (const [currency, unit] of [['USD', 0.01], ['JPY', 1], ['KWD', 0.001]] as const) {
+      preferences.currency_display = currency
+      for (const multiplier of [-0.6, -0.4, 0.4, 0.6]) {
+        const delta = unit * multiplier
+        mockHistory({
+          opening_balance: 0,
+          current: [{ day: 1, balance: delta }],
+          ...(singleMonth ? {
+            comparison: [{ day: 1, balance: 0 }],
+            comparison_month: '2026-02',
+            comparison_opening_balance: 0,
+          } : {
+            baseline: [{ day: 1, median: 0, lower_quartile: null, upper_quartile: null }],
+          }),
+        })
+        await act(() => queryClient.refetchQueries({ queryKey: ['dashboard', 'balance-history'] }))
+        const equal = Math.abs(multiplier) < 0.5
+        const reference = singleMonth ? 'February 2026' : 'the median'
+        const formatted = formatCurrency(Math.abs(delta), currency, 'en-US').replace(/\u00a0/g, ' ')
+        const zero = formatCurrency(0, currency, 'en-US').replace(/\u00a0/g, ' ')
+        const footer = await screen.findByText(equal
+          ? `Day 1: cumulative change equals ${reference} (${zero}).`
+          : `Day 1: cumulative change is ${formatted} ${delta > 0 ? 'above' : 'below'} ${reference} (${zero}).`)
+        const triangle = footer.querySelector('span')
+        if (equal) {
+          expect(triangle).toBeNull()
+        } else {
+          expect(triangle).toHaveTextContent(delta > 0 ? '\u25B2' : '\u25BC')
+          expect(triangle).toHaveClass(delta > 0 ? 'text-emerald-600' : 'text-rose-500')
+        }
+        expect(container.querySelector('.h-20.shrink-0')).toContainElement(footer)
+      }
+    }
   })
 
   it('defaults to the active months of the previous 12 when the URL has no selection', async () => {
